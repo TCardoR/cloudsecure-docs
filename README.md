@@ -1,5 +1,7 @@
 # CloudSecure Docs
 
+[![CI](https://github.com/TCardoR/cloudsecure-docs/actions/workflows/ci.yml/badge.svg)](https://github.com/TCardoR/cloudsecure-docs/actions/workflows/ci.yml)
+
 **Versión 1.1 final del MVP académico.**
 
 MVP académico de gestión documental segura construido con arquitectura **Serverless en AWS**.
@@ -34,16 +36,23 @@ El objetivo es demostrar una solución cloud pequeña pero funcional: registro e
 
 ```mermaid
 flowchart LR
-    U[Usuario] --> CF[CloudFront]
-    CF --> FE[S3 Frontend]
-    U --> C[Cognito]
-    FE --> API[API Gateway]
-    C -. JWT .-> API
-    API --> L[Lambda]
+    U[Usuario] -->|HTTPS| CF[CloudFront]
+    CF --> FE[S3 Frontend privado]
+
+    FE -->|Registro / Login| C[Amazon Cognito]
+    C -->|JWT| FE
+
+    FE -->|Bearer JWT| API[API Gateway]
+    API -->|Autoriza y enruta| L[AWS Lambda]
+
     L --> D[(DynamoDB)]
-    L --> S[(S3 Documentos)]
-    U -. URLs prefirmadas .-> S
+    L --> S[(S3 Documentos privados)]
+    L --> CW[CloudWatch / X-Ray]
+
+    FE -. URL prefirmada temporal .-> S
 ```
+
+El frontend obtiene el token JWT desde Cognito y lo envía a API Gateway en las solicitudes protegidas. API Gateway valida el token antes de permitir que la petición llegue a Lambda.
 
 Más detalle en [`docs/architecture.md`](docs/architecture.md).
 
@@ -51,15 +60,15 @@ Más detalle en [`docs/architecture.md`](docs/architecture.md).
 
 | Servicio | Uso |
 |---|---|
-| Amazon Cognito | Registro, confirmación e inicio de sesión |
+| Amazon Cognito | Registro, confirmación, inicio de sesión y recuperación de contraseña |
 | API Gateway | API REST protegida |
 | AWS Lambda | Lógica del backend |
 | Amazon DynamoDB | Metadata de documentos |
 | Amazon S3 | Archivos privados y frontend |
 | Amazon CloudFront | Hosting HTTPS del frontend |
 | AWS IAM | Permisos de mínimo privilegio para Lambda |
-| CloudWatch / X-Ray | Logs y trazabilidad |
-| AWS SAM | Infraestructura como código |
+| CloudWatch / X-Ray | Logs, métricas y trazabilidad |
+| AWS SAM / CloudFormation | Infraestructura como código |
 
 ## Estructura
 
@@ -70,7 +79,8 @@ cloudsecure-docs/
 │   │   ├── app.js
 │   │   └── validation.js
 │   ├── test/
-│   └── package.json
+│   ├── package.json
+│   └── package-lock.json
 ├── frontend/
 │   ├── index.html
 │   ├── styles.css
@@ -114,14 +124,16 @@ aws login --region us-east-2
 
 ## Instalación local de dependencias
 
+El repositorio incluye `backend/package-lock.json`, por lo que para reproducir exactamente las dependencias validadas se recomienda usar `npm ci`:
+
 ```powershell
 cd backend
-npm install
+npm ci
 npm test
 cd ..
 ```
 
-Al ejecutar `npm install` se generará `package-lock.json`; es recomendable incluirlo en GitHub para fijar las versiones instaladas.
+`npm ci` instala las versiones fijadas en `package-lock.json` sin modificar el lockfile, lo que mejora la reproducibilidad.
 
 ## Despliegue completo
 
@@ -155,10 +167,9 @@ Después configura y publica el frontend:
 .\scripts\deploy-frontend.ps1 -StackName cloudsecure-docs -Region us-east-2
 ```
 
-
 ### Migración segura de la política TLS en una pila existente
 
-Si vienes de la versión 1.0, la API actual usa la política heredada `TLS_1_0`. AWS recomienda migrar primero a una política mejorada manteniendo `EndpointAccessMode=BASIC`, validar el tráfico y después cambiar a `STRICT`. Por eso realiza la actualización 1.1 en dos pasos:
+Si vienes de la versión 1.0, la API puede usar una política TLS heredada. La actualización 1.1 puede realizarse en dos pasos: primero con `EndpointAccessMode=BASIC`, validando el tráfico, y después con `STRICT`.
 
 ```powershell
 .\scripts\deploy.ps1 -StackName cloudsecure-docs -Region us-east-2 -ApiEndpointAccessMode BASIC
@@ -170,7 +181,7 @@ Prueba registro/login, listado, carga, descarga y eliminación. Si todo está co
 .\scripts\deploy.ps1 -StackName cloudsecure-docs -Region us-east-2 -ApiEndpointAccessMode STRICT
 ```
 
-Los cambios de política/modo de acceso de API Gateway pueden tardar alrededor de 15 minutos en propagarse. Para instalaciones nuevas puede utilizarse directamente el valor predeterminado `STRICT`.
+Para instalaciones nuevas puede utilizarse directamente el valor predeterminado `STRICT`.
 
 ## Primera prueba funcional
 
@@ -216,7 +227,7 @@ Cognito User Pool controla el registro, confirmación, inicio de sesión, reenv�
 
 ### Autorización
 
-API Gateway usa Cognito como authorizer. Una solicitud sin un JWT válido no llega a Lambda.
+El frontend obtiene un JWT válido desde Cognito y lo envía como token Bearer. API Gateway usa Cognito como authorizer y valida ese token antes de permitir que la solicitud llegue a Lambda.
 
 ### Aislamiento por usuario
 
@@ -239,7 +250,7 @@ La función recibe políticas limitadas a operaciones CRUD sobre el bucket y la 
 
 ### Transporte y cabeceras HTTP
 
-API Gateway utiliza una política TLS moderna compatible con TLS 1.2/1.3 y Perfect Forward Secrecy. CloudFront fuerza redirección de HTTP a HTTPS y adjunta la política administrada `SecurityHeadersPolicy` para agregar cabeceras como HSTS y `X-Content-Type-Options`.
+API Gateway utiliza una política TLS moderna compatible con TLS 1.2/1.3 y Perfect Forward Secrecy. CloudFront fuerza redirección de HTTP a HTTPS y adjunta la política administrada `SecurityHeadersPolicy` para agregar cabeceras de seguridad.
 
 ### Logs
 
@@ -251,6 +262,7 @@ Ejecuta:
 
 ```powershell
 cd backend
+npm ci
 npm test
 ```
 
@@ -266,6 +278,39 @@ Para la presentación se recomienda añadir pruebas manuales de:
 - Usuario A intentando consultar un ID perteneciente al usuario B → no encontrado para A.
 - Carga, descarga y eliminación correcta.
 - Capturas de CloudWatch mostrando invocaciones.
+
+## Integración continua
+
+El workflow [`CI`](.github/workflows/ci.yml) se ejecuta automáticamente en cada `push` a `main` y en los pull requests.
+
+La validación automática incluye:
+
+1. Checkout del repositorio.
+2. Configuración de Node.js 22.
+3. Instalación de dependencias del backend.
+4. Ejecución de pruebas unitarias.
+5. Instalación de AWS SAM CLI.
+6. `sam validate --lint` sobre `template.yaml`.
+7. `sam build` de la aplicación Serverless.
+
+El badge ubicado al inicio de este README permite comprobar rápidamente el estado actual del workflow.
+
+## Costos y control de costos
+
+La arquitectura fue diseñada como un MVP de bajo consumo y orientada a pago por uso:
+
+- **AWS Lambda:** se ejecuta solo cuando existen solicitudes; no hay un servidor dedicado encendido permanentemente.
+- **DynamoDB:** el volumen del MVP es pequeño y el consumo depende de las operaciones realizadas.
+- **Amazon S3:** cobra principalmente por almacenamiento y solicitudes; los archivos de prueba son pequeños.
+- **CloudFront:** distribuye el frontend y su consumo depende del tráfico generado.
+- **API Gateway:** cobra por solicitudes procesadas.
+- **CloudWatch:** la retención de logs está limitada a 14 días para evitar acumulación innecesaria.
+
+Durante el desarrollo se configuró un presupuesto de AWS con una alerta temprana para detectar consumo inesperado. Para una práctica académica se recomienda revisar periódicamente Billing/Cost Management y eliminar la infraestructura cuando ya no sea necesaria.
+
+El proyecto incluye `scripts/destroy.ps1`, que vacía primero los buckets S3 y luego elimina el stack de CloudFormation para reducir el riesgo de dejar recursos activos por descuido.
+
+> Los costos reales dependen de la región, el tráfico, el almacenamiento y las tarifas vigentes de AWS. Este repositorio no publica una URL de producción para evitar uso externo no controlado de los recursos desplegados.
 
 ## Evidencias para la actividad
 
