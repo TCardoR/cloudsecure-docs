@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="CloudSecure Docs - MVP serverless para gestión documental segura en AWS." />
+  <title>CloudSecure Docs</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Computación en la Nube · Proyecto ABP</p>
+      <h1>CloudSecure Docs</h1>
+      <p class="subtitle">Gestión documental segura con arquitectura Serverless en AWS</p>
+    </div>
+    <button id="logoutBtn" class="ghost hidden" type="button">Cerrar sesión</button>
+  </header>
+
+  <main class="container">
+    <div id="alert" class="alert hidden" role="status" aria-live="polite"></div>
+
+    <section id="authSection" class="auth-grid">
+      <article class="card">
+        <span class="badge">Acceso</span>
+        <h2>Iniciar sesión</h2>
+        <form id="loginForm" class="form-stack">
+          <label>
+            Correo
+            <input id="loginEmail" type="email" autocomplete="email" required />
+          </label>
+          <label>
+            Contraseña
+            <input id="loginPassword" type="password" autocomplete="current-password" required />
+          </label>
+          <button type="submit">Ingresar</button>
+        </form>
+
+        <button id="showRecoveryBtn" class="text-button" type="button">¿Olvidaste tu contraseña?</button>
+
+        <div id="recoveryPanel" class="recovery-panel hidden">
+          <div class="divider"></div>
+          <h3>Recuperar contraseña</h3>
+          <p class="hint">AWS Cognito enviará un código al correo verificado de la cuenta.</p>
+
+          <form id="forgotPasswordForm" class="form-stack compact-form">
+            <label>
+              Correo de la cuenta
+              <input id="recoveryEmail" type="email" autocomplete="email" required />
+            </label>
+            <button type="submit" class="ghost dark">Enviar código</button>
+          </form>
+
+          <form id="resetPasswordForm" class="form-stack compact-form hidden">
+            <label>
+              Código recibido
+              <input id="recoveryCode" inputmode="numeric" autocomplete="one-time-code" required />
+            </label>
+            <label>
+              Nueva contraseña
+              <input id="newPassword" type="password" minlength="8" autocomplete="new-password" required />
+            </label>
+            <p class="password-hint">Mínimo 8 caracteres, con mayúscula, minúscula y número.</p>
+            <button type="submit">Cambiar contraseña</button>
+          </form>
+
+          <button id="cancelRecoveryBtn" class="text-button subtle" type="button">Volver al inicio de sesión</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <span class="badge">Primera vez</span>
+        <h2>Crear cuenta</h2>
+        <form id="signupForm" class="form-stack">
+          <label>
+            Correo
+            <input id="signupEmail" type="email" autocomplete="email" required />
+          </label>
+          <label>
+            Contraseña
+            <input id="signupPassword" type="password" minlength="8" autocomplete="new-password" required />
+          </label>
+          <p class="password-hint">Mínimo 8 caracteres, con mayúscula, minúscula y número.</p>
+          <button type="submit" class="secondary">Registrarme</button>
+        </form>
+
+        <div class="divider"></div>
+
+        <form id="confirmForm" class="form-stack">
+          <h3>Confirmar correo</h3>
+          <label>
+            Código recibido
+            <input id="confirmCode" inputmode="numeric" autocomplete="one-time-code" required />
+          </label>
+          <button type="submit" class="ghost dark">Confirmar cuenta</button>
+          <button id="resendConfirmationBtn" type="button" class="text-button">Reenviar código de confirmación</button>
+        </form>
+      </article>
+    </section>
+
+    <section id="dashboardSection" class="hidden">
+      <div class="dashboard-heading">
+        <div>
+          <span class="badge">Panel</span>
+          <h2>Mis documentos</h2>
+          <p id="userEmail" class="muted"></p>
+        </div>
+        <button id="refreshBtn" class="ghost dark" type="button">Actualizar</button>
+      </div>
+
+      <div class="dashboard-grid">
+        <article class="card upload-card">
+          <h3>Subir documento</h3>
+          <form id="uploadForm" class="form-stack">
+            <label>
+              Archivo (máx. 10 MB)
+              <input id="fileInput" type="file" required />
+            </label>
+            <label>
+              Categoría
+              <input id="categoryInput" type="text" maxlength="80" value="General" required />
+            </label>
+            <label>
+              Clasificación
+              <select id="classificationInput">
+                <option value="PUBLIC">Público</option>
+                <option value="INTERNAL" selected>Interno</option>
+                <option value="CONFIDENTIAL">Confidencial</option>
+              </select>
+            </label>
+            <button type="submit">Subir a AWS</button>
+          </form>
+          <p class="hint">Los archivos permanecen privados en S3. La clasificación es descriptiva en este MVP: todos los documentos siguen siendo visibles únicamente para su propietario.</p>
+          <p class="hint">La carga y descarga usan URLs prefirmadas temporales; el navegador nunca recibe credenciales de AWS.</p>
+        </article>
+
+        <article class="card documents-card">
+          <div class="list-header">
+            <h3>Archivos almacenados</h3>
+            <span id="documentCount" class="counter">0</span>
+          </div>
+          <div id="documentsList" class="documents-list">
+            <div class="empty-state">Todavía no hay documentos.</div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>CloudSecure Docs v1.1 · AWS Cognito · API Gateway · Lambda · DynamoDB · S3 · CloudFront</p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

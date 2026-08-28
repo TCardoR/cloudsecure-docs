@@ -1,0 +1,300 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: CloudSecure Docs - MVP serverless para gestion documental segura.
+
+Parameters:
+  AppName:
+    Type: String
+    Default: cloudsecure-docs
+    AllowedPattern: '^[a-z0-9-]+$'
+    Description: Prefijo usado para nombrar los recursos del proyecto.
+  ApiEndpointAccessMode:
+    Type: String
+    Default: STRICT
+    AllowedValues:
+      - BASIC
+      - STRICT
+    Description: Modo de acceso del endpoint de API Gateway para la politica TLS mejorada.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures:
+      - x86_64
+    Timeout: 10
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        DOCUMENTS_TABLE: !Ref DocumentsTable
+        DOCUMENTS_BUCKET: !Ref DocumentsBucket
+
+Resources:
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+            AllowedOrigins:
+              - !Sub 'https://${FrontendDistribution.DomainName}'
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+  DocumentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: ownerId
+          AttributeType: S
+        - AttributeName: documentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: ownerId
+          KeyType: HASH
+        - AttributeName: documentId
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AppName}-users'
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub '${AppName}-web'
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub '${AppName}-api'
+      StageName: Prod
+      EndpointConfiguration:
+        Type: EDGE
+      SecurityPolicy: SecurityPolicy_TLS12_PFS_2025_EDGE
+      EndpointAccessMode: !Ref ApiEndpointAccessMode
+      TracingEnabled: true
+      Cors:
+        AllowMethods: "'GET,POST,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: !Sub "'https://${FrontendDistribution.DomainName}'"
+        MaxAge: "'600'"
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt UserPool.Arn
+
+  DocumentsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/${AppName}/lambda/documents'
+      RetentionInDays: 14
+
+  DocumentsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DocumentsLogGroup
+    Properties:
+      FunctionName: !Sub '${AppName}-documents'
+      CodeUri: backend/
+      Handler: src/app.handler
+      Description: API para crear URLs prefirmadas y gestionar metadata de documentos.
+      Environment:
+        Variables:
+          FRONTEND_ORIGIN: !Sub 'https://${FrontendDistribution.DomainName}'
+      LoggingConfig:
+        LogGroup: !Ref DocumentsLogGroup
+        LogFormat: JSON
+        ApplicationLogLevel: INFO
+        SystemLogLevel: INFO
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocumentsTable
+        - S3CrudPolicy:
+            BucketName: !Ref DocumentsBucket
+      Events:
+        ListDocuments:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /documents
+            Method: GET
+        CreateUploadUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /documents/upload-url
+            Method: POST
+        CompleteUpload:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /documents/{documentId}/complete
+            Method: POST
+        CreateDownloadUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /documents/{documentId}/download
+            Method: GET
+        DeleteDocument:
+          Type: Api
+          Properties:
+            RestApiId: !Ref Api
+            Path: /documents/{documentId}
+            Method: DELETE
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AppName}-oac'
+        Description: OAC para servir el frontend privado desde S3.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AppName} frontend'
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+        Origins:
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt FrontendOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ResponseHeadersPolicyId: '67f7725c-6f97-4210-82d7-5512b31e9d03'
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}'
+
+Outputs:
+  ApiUrl:
+    Description: URL base de la API REST.
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}/Prod'
+  UserPoolId:
+    Description: ID del Cognito User Pool.
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Description: ID del cliente web de Cognito.
+    Value: !Ref UserPoolClient
+  AwsRegion:
+    Description: Region del despliegue.
+    Value: !Ref AWS::Region
+  DocumentsBucketName:
+    Description: Bucket privado donde se almacenan los documentos.
+    Value: !Ref DocumentsBucket
+  FrontendBucketName:
+    Description: Bucket privado del frontend.
+    Value: !Ref FrontendBucket
+  FrontendDistributionId:
+    Description: ID de CloudFront para invalidaciones.
+    Value: !Ref FrontendDistribution
+  FrontendUrl:
+    Description: URL HTTPS de la aplicacion.
+    Value: !Sub 'https://${FrontendDistribution.DomainName}'
+  DocumentsLogGroupName:
+    Description: Grupo de logs administrado por CloudFormation con retencion de 14 dias.
+    Value: !Ref DocumentsLogGroup
