@@ -141,7 +141,6 @@ Resources:
 
   DocumentsFunction:
     Type: AWS::Serverless::Function
-    DependsOn: DocumentsLogGroup
     Properties:
       FunctionName: !Sub '${AppName}-documents'
       CodeUri: backend/
